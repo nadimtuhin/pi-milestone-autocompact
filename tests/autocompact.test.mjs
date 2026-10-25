@@ -45,6 +45,23 @@ function smallBranchFixture() {
   ];
 }
 
+function withFakeClock(fn) {
+  return async (...args) => {
+    let now = 1_000_000;
+    const origDateNow = Date.now;
+    Date.now = () => now;
+    const clock = {
+      now: () => now,
+      advance: (ms) => { now += ms; },
+    };
+    try {
+      await fn(clock, ...args);
+    } finally {
+      Date.now = origDateNow;
+    }
+  };
+}
+
 function harness(options = {}) {
   const handlers = new Map(), commands = new Map(), attempts = [], notices = [];
   let settings = options.settings ?? {};
@@ -277,3 +294,132 @@ test('async onError avoids duplicate UI notification while clearing in-flight lo
   await h.command();
   assert.equal(h.attempts.length, 2);
 });
+
+test('retry at same usage after failure and 120s cooldown without fresh milestone', withFakeClock(async (clock) => {
+  const h = harness({ usage: { tokens: 40000, contextWindow: 200000 } });
+  await h.emit('tool_result', completion());
+  await h.emit('agent_settled');
+  assert.equal(h.attempts.length, 1);
+
+  h.attempts[0].onError(new Error('transient failure'));
+
+  await h.emit('agent_settled');
+  assert.equal(h.attempts.length, 1);
+
+  clock.advance(120_000);
+  await h.emit('agent_settled');
+  assert.equal(h.attempts.length, 2);
+}));
+
+test('no retry before cooldown expires after failure', withFakeClock(async (clock) => {
+  const h = harness({ usage: { tokens: 40000, contextWindow: 200000 } });
+  await h.emit('tool_result', completion());
+  await h.emit('agent_settled');
+  assert.equal(h.attempts.length, 1);
+
+  h.attempts[0].onError(new Error('transient failure'));
+
+  clock.advance(60_000);
+  for (let i = 0; i < 3; i++) {
+    await h.emit('agent_settled');
+  }
+  assert.equal(h.attempts.length, 1);
+
+  clock.advance(60_000);
+  await h.emit('agent_settled');
+  assert.equal(h.attempts.length, 2);
+}));
+
+test('synchronous fail preserves checkpoint and baseline, retrying after cooldown', withFakeClock(async (clock) => {
+  const h = harness({ usage: { tokens: 40000, contextWindow: 200000 } });
+  await h.emit('tool_result', completion());
+
+  let failSync = true;
+  h.ctx.compact = (o) => {
+    if (failSync) {
+      throw new Error('sync compact failure');
+    }
+    h.attempts.push(o);
+  };
+
+  await h.emit('agent_settled');
+  assert.equal(h.notices.length, 1);
+  assert.equal(h.attempts.length, 0);
+
+  failSync = false;
+  clock.advance(60_000);
+  await h.emit('agent_settled');
+  assert.equal(h.attempts.length, 0);
+
+  clock.advance(60_000);
+  await h.emit('agent_settled');
+  assert.equal(h.attempts.length, 1);
+}));
+
+test('failed manual request remains automatic pending without spin', withFakeClock(async (clock) => {
+  const h = harness({ usage: { tokens: 40000, contextWindow: 200000 } });
+  await h.command();
+  assert.equal(h.attempts.length, 1);
+
+  h.attempts[0].onError(new Error('manual attempt failed'));
+
+  for (let i = 0; i < 5; i++) {
+    await h.emit('agent_settled');
+  }
+  assert.equal(h.attempts.length, 1);
+
+  clock.advance(120_000);
+  await h.emit('agent_settled');
+  assert.equal(h.attempts.length, 2);
+}));
+
+test('milestone arriving during in-flight attempt is preserved after success', withFakeClock(async (clock) => {
+  const h = harness({ usage: { tokens: 40000, contextWindow: 100000 } });
+  await h.emit('tool_result', completion('m1'));
+  await h.emit('agent_settled');
+  assert.equal(h.attempts.length, 1);
+
+  await h.emit('tool_result', completion('m2'));
+
+  h.attempts[0].onComplete({});
+
+  h.setUsage({ tokens: 40000, contextWindow: 100000 });
+  await h.emit('agent_settled');
+
+  h.setUsage({ tokens: 56000, contextWindow: 100000 });
+  clock.advance(120_000);
+  await h.emit('agent_settled');
+  assert.equal(h.attempts.length, 2);
+}));
+
+test('stale epoch callback after session reset does not unlock or mutate state', withFakeClock(async (clock) => {
+  const h = harness({ usage: { tokens: 40000, contextWindow: 200000 } });
+  await h.emit('tool_result', completion());
+  await h.emit('agent_settled');
+  assert.equal(h.attempts.length, 1);
+
+  const staleAttempt = h.attempts[0];
+  await h.emit('session_start');
+
+  staleAttempt.onError(new Error('stale error'));
+  assert.equal(h.notices.length, 0);
+
+  clock.advance(120_000);
+  await h.emit('agent_settled');
+  assert.equal(h.attempts.length, 1);
+}));
+
+test('successful compaction consumes triggering milestone and does not re-compact at same usage', withFakeClock(async (clock) => {
+  const h = harness({ usage: { tokens: 40000, contextWindow: 100000 } });
+  await h.emit('tool_result', completion());
+  await h.emit('agent_settled');
+  assert.equal(h.attempts.length, 1);
+
+  h.attempts[0].onComplete({});
+  h.setUsage({ tokens: 10000, contextWindow: 100000 });
+  await h.emit('agent_settled');
+
+  clock.advance(120_000);
+  await h.emit('agent_settled');
+  assert.equal(h.attempts.length, 1);
+}));

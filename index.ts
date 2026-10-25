@@ -41,14 +41,15 @@ export default function (pi: ExtensionAPI): void {
     const keepRecentTokens = getKeepRecentTokens(pi.getSettings?.(), ctx.model);
     if (!isConversationCompactable(branch, keepRecentTokens)) return;
 
+    const attemptedCheckpoint = pending;
     compacting = true;
     pending = manual = false;
-    baseline = usage!.tokens!;
     lastAttempt = Date.now();
     const startedEpoch = epoch;
     const fail = (error: Error, notifyUser = true) => {
       if (startedEpoch !== epoch) return;
       compacting = false;
+      if (attemptedCheckpoint) pending = true;
       if (notifyUser) {
         notify(ctx, `Checkpoint compaction failed: ${error.message}`);
       }
