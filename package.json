@@ -1,0 +1,27 @@
+{
+  "name": "pi-milestone-autocompact",
+  "version": "0.1.0",
+  "description": "Checkpoint-aware context compaction for Pi",
+  "type": "module",
+  "license": "MIT",
+  "author": "Nadim Tuhin",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nadimtuhin/pi-milestone-autocompact.git"
+  },
+  "keywords": ["pi-package"],
+  "files": ["core.ts", "index.ts", "tests/autocompact.test.mjs"],
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "scripts": {
+    "test": "node --test tests/autocompact.test.mjs"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.1.0",
+    "jiti": "2.7.0"
+  }
+}
