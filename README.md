@@ -20,7 +20,7 @@ pi -e ./index.ts
 ```
 
 Requires a Pi host exposing `findCutPoint`, `agent_settled`, `getSettings` and
-`ctx.compact`. Development tests pin `@earendil-works/pi-coding-agent` 1.1.0;
+`ctx.compact`. Development tests pin `@earendil-works/pi-coding-agent` 1.5.2;
 other host versions are not verified. No runtime dependencies are bundled.
 
 ## Behavior
